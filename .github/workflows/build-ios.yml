@@ -1,0 +1,51 @@
+name: build-ios-native
+
+# ★ 第一步：只验证工具链能不能编出 iOS arm64 dylib。
+#   编出来是 Mach-O arm64，就说明整条路通了，再往上加 ImGui / Metal。
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境自检
+        run: |
+          echo '--- xcodebuild ---'; xcodebuild -version
+          echo '--- cmake ---';     cmake --version
+          echo '--- 可用 SDK ---';  xcodebuild -showsdks | grep -i ios || true
+
+      - name: 配置（iOS arm64）
+        run: |
+          cmake -B build \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: 编译
+        run: cmake --build build --config Release -j 4
+
+      - name: 验证产物是 Mach-O arm64
+        run: |
+          find build -name '*.dylib' -o -name '*.a' | head -20
+          LIB=$(find build -name 'libtoolchain_probe.dylib' | head -1)
+          echo "LIB=$LIB"
+          file "$LIB"
+          lipo -info "$LIB"
+          # 必须是 arm64 的 Mach-O，否则这一步就红
+          file "$LIB" | grep -q 'Mach-O 64-bit' && echo 'OK: Mach-O'
+          lipo -info "$LIB" | grep -q 'arm64' && echo 'OK: arm64'
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-native-probe
+          path: build/**/*.dylib
+          if-no-files-found: error
