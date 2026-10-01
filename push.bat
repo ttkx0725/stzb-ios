@@ -17,57 +17,58 @@ if errorlevel 1 (
 
 if not exist .git ( git init -b main )
 
-REM --- repo-local identity (never touches global config) -------------
 git config user.email >nul 2>nul
 if errorlevel 1 git config user.email "1260467810@qq.com"
 git config user.name >nul 2>nul
 if errorlevel 1 git config user.name "ttkx0725"
 
-echo [1/3] git add ...
+echo [1/4] git add ...
 git add -A
 
-echo [2/3] git commit ...
+echo [2/4] git commit ...
 git commit -m "ios native toolchain probe"
 
-echo [3/3] git push ...
 git remote remove origin >nul 2>nul
 git remote add origin https://github.com/ttkx0725/stzb-ios.git
 
-REM --- attempt 1: as configured (may go through a local proxy) -------
-git push -u origin main
-if not errorlevel 1 goto ok
+REM ---------------------------------------------------------------
+REM Proxy note: git is configured for http://127.0.0.1:7897 but that
+REM proxy is often not running. Every network command below is given
+REM -c http.proxy= -c https.proxy= so it connects DIRECTLY, without
+REM touching your global git config.
+REM ---------------------------------------------------------------
 
-echo.
-echo [i] push failed -- retrying with the proxy DISABLED for this command only.
-echo     (git is configured to use a proxy that is not currently running)
-echo.
+echo [3/4] git fetch + rebase (merge whatever is already on GitHub) ...
+echo        if the repo was created with a README, this reconciles it.
+git -c http.proxy= -c https.proxy= fetch origin main
+if not errorlevel 1 (
+  git -c http.proxy= -c https.proxy= rebase origin/main
+  if errorlevel 1 (
+    echo        rebase hit a conflict -- falling back to merge.
+    git rebase --abort >nul 2>nul
+    git -c http.proxy= -c https.proxy= merge origin/main --allow-unrelated-histories -m "merge remote"
+  )
+) else (
+  echo        remote branch not found yet -- first push, nothing to merge.
+)
 
-REM --- attempt 2: bypass proxy for this single invocation ------------
-REM  -c http.proxy=  clears it for this command only; global config untouched.
+echo [4/4] git push ...
 git -c http.proxy= -c https.proxy= push -u origin main
-if not errorlevel 1 goto ok
+if errorlevel 1 (
+  echo.
+  echo ============================================================
+  echo  [X] push failed.
+  echo.
+  echo  If it says 'Failed to connect' -- no route to github.com.
+  echo    A) start your proxy app (git points at 127.0.0.1:7897)
+  echo    B) or:  git config --global http.proxy socks5://127.0.0.1:1080
+  echo    C) or:  git config --global --unset http.proxy
+  echo.
+  echo  Otherwise copy the error text and send it over.
+  echo ============================================================
+  pause & exit /b 1
+)
 
-echo.
-echo ============================================================
-echo  [X] both attempts failed.
-echo.
-echo  Most likely: no route to github.com right now.
-echo  Try one of these, then run this script again:
-echo.
-echo    A) start your proxy app (Clash / v2ray / etc.)
-echo       git is pointed at  http://127.0.0.1:7897
-echo.
-echo    B) or point git at the proxy that IS listening on 1080:
-echo       git config --global http.proxy  socks5://127.0.0.1:1080
-echo       git config --global https.proxy socks5://127.0.0.1:1080
-echo.
-echo    C) or go direct (works if github is reachable without proxy):
-echo       git config --global --unset http.proxy
-echo       git config --global --unset https.proxy
-echo ============================================================
-pause & exit /b 1
-
-:ok
 echo.
 echo ============================================================
 echo  Done. Open this page to see the build result:
