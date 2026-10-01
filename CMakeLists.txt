@@ -1,18 +1,53 @@
 cmake_minimum_required(VERSION 3.20)
-project(stzb_ios_native C)
 
-# ★★★ 第一步：工具链探针。
-#   只编一个最小的 dylib，用来验证「macOS runner + iOS SDK + CMake」这条链通不通。
-#   通了再往上加：imgui 核心 → imgui_impl_metal → cimgui → ao_overlay。
+# OBJCXX 必须开启：imgui_impl_metal.mm 是 Objective-C++，
+# 不开的话 CMake 不知道怎么编 .mm。
+project(stzb_ios_native C CXX OBJCXX)
 
-add_library(toolchain_probe SHARED src/toolchain_probe.c)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# iOS 上 dylib 默认不导出符号，必须显式声明要导出的入口
-target_compile_definitions(toolchain_probe PRIVATE STZB_IOS=1)
+set(CIMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cimgui)
+set(IMGUI_DIR  ${CIMGUI_DIR}/imgui)
+
+if(NOT EXISTS ${IMGUI_DIR}/imgui.cpp)
+  message(FATAL_ERROR "imgui sources missing at ${IMGUI_DIR}")
+endif()
+
+# ------------------------------------------------------------------
+# cimgui —— ImGui.NET 在运行期要绑的就是这个库的导出符号。
+#
+# 和安卓的差别只有一处：后端从 imgui_impl_opengl3.cpp 换成
+# imgui_impl_metal.mm（iOS 是 Metal，不是 GLES3）。
+# ------------------------------------------------------------------
+add_library(cimgui SHARED
+    ${CIMGUI_DIR}/cimgui.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_metal.mm
+)
+
+target_include_directories(cimgui PUBLIC
+    ${CIMGUI_DIR}
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-  # 关键：让所有符号默认可见，否则 dlopen 之后 dlsym 找不到
-  target_link_options(toolchain_probe PRIVATE
-    "-Wl,-install_name,@rpath/libtoolchain_probe.dylib")
-  message(STATUS "iOS build: arch=${CMAKE_OSX_ARCHITECTURES} sysroot=${CMAKE_OSX_SYSROOT}")
+  target_link_libraries(cimgui PRIVATE
+      "-framework Metal"
+      "-framework MetalKit"
+      "-framework QuartzCore"
+      "-framework Foundation"
+      "-framework UIKit"
+  )
+  target_link_options(cimgui PRIVATE "-Wl,-install_name,@rpath/libcimgui.dylib")
+  message(STATUS "iOS cimgui: arch=${CMAKE_OSX_ARCHITECTURES} sysroot=${CMAKE_OSX_SYSROOT}")
 endif()
+
+# ------------------------------------------------------------------
+# 工具链探针（保留）：一个最小 dylib，用来快速判断基础链路是否还通。
+# ------------------------------------------------------------------
+add_library(toolchain_probe SHARED src/toolchain_probe.c)

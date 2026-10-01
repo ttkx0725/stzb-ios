@@ -1,26 +1,23 @@
 name: build-ios-native
 
-# ★ 第一步：只验证工具链能不能编出 iOS arm64 dylib。
-#   编出来是 Mach-O arm64，就说明整条路通了，再往上加 ImGui / Metal。
-
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  probe:
+  build:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
-      - name: 环境自检
+      - name: Toolchain info
         run: |
-          echo '--- xcodebuild ---'; xcodebuild -version
-          echo '--- cmake ---';     cmake --version
-          echo '--- 可用 SDK ---';  xcodebuild -showsdks | grep -i ios || true
+          xcodebuild -version
+          cmake --version
+          xcodebuild -showsdks | grep -i ios || true
 
-      - name: 配置（iOS arm64）
+      - name: Configure (iOS arm64)
         run: |
           cmake -B build \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -29,23 +26,37 @@ jobs:
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: 编译
+      - name: Build
         run: cmake --build build --config Release -j 4
 
-      - name: 验证产物是 Mach-O arm64
+      - name: Verify Mach-O arm64
         run: |
-          find build -name '*.dylib' -o -name '*.a' | head -20
-          LIB=$(find build -name 'libtoolchain_probe.dylib' | head -1)
-          echo "LIB=$LIB"
-          file "$LIB"
-          lipo -info "$LIB"
-          # 必须是 arm64 的 Mach-O，否则这一步就红
-          file "$LIB" | grep -q 'Mach-O 64-bit' && echo 'OK: Mach-O'
-          lipo -info "$LIB" | grep -q 'arm64' && echo 'OK: arm64'
+          set -e
+          for LIB in $(find build -name '*.dylib'); do
+            echo "== $LIB"
+            file "$LIB"
+            lipo -info "$LIB"
+            file "$LIB" | grep -q 'Mach-O 64-bit' || { echo 'NOT Mach-O'; exit 1; }
+            lipo -info "$LIB" | grep -q 'arm64'     || { echo 'NOT arm64';  exit 1; }
+          done
 
-      - name: 上传产物
+      - name: Verify cimgui exports (CRITICAL)
+        continue-on-error: true
+        run: |
+          LIB=$(find build -name 'libcimgui.dylib' | head -1)
+          echo "libcimgui = $LIB"
+          nm -gU "$LIB" > exports.txt 2>/dev/null || nm -g "$LIB" > exports.txt
+          wc -l exports.txt
+          MISSING=0
+          for SYM in _igNewFrame _igRender _igBegin _igEnd _ImFontAtlas_Build _ImFontAtlas_GetTexDataAsRGBA32 _ImGui_ImplMetal_Init _ImGui_ImplMetal_NewFrame _ImGui_ImplMetal_RenderDrawData _igGetIO _igCreateContext; do
+            if grep -q "\b$SYM\b" exports.txt; then echo "  OK   $SYM"; else echo "  MISS $SYM"; MISSING=$((MISSING+1)); fi
+          done
+          echo "missing = $MISSING"
+          test "$MISSING" -eq 0
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ios-native-probe
+          name: ios-native
           path: build/**/*.dylib
           if-no-files-found: error
